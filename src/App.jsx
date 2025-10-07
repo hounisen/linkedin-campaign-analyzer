@@ -43,26 +43,54 @@ const LinkedInCampaignAnalyzer = () => {
       const arrayBuffer = await file.arrayBuffer();
       
       let fileContent;
+      let encodingUsed = 'unknown';
+      
+      // Prøv UTF-16LE først
       try {
         const decoder = new TextDecoder('utf-16le');
         fileContent = decoder.decode(arrayBuffer);
-        if (fileContent.includes('�') || !fileContent.includes('Campaign')) {
-          throw new Error('Not UTF-16');
+        // Tjek om det ser ud til at være valid UTF-16
+        if (!fileContent.includes('�') && (fileContent.includes('Campaign') || fileContent.includes('Impressions'))) {
+          encodingUsed = 'utf-16le';
+          console.log('Successfully decoded as UTF-16LE');
+        } else {
+          throw new Error('Not valid UTF-16LE');
         }
       } catch (e) {
-        const decoder = new TextDecoder('utf-8');
-        fileContent = decoder.decode(arrayBuffer);
+        console.log('UTF-16LE failed, trying UTF-8...');
+        // Prøv UTF-8
+        try {
+          const decoder = new TextDecoder('utf-8');
+          fileContent = decoder.decode(arrayBuffer);
+          encodingUsed = 'utf-8';
+          console.log('Successfully decoded as UTF-8');
+        } catch (e2) {
+          // Prøv Windows-1252 / CP1252
+          console.log('UTF-8 failed, trying Windows-1252...');
+          const decoder = new TextDecoder('windows-1252');
+          fileContent = decoder.decode(arrayBuffer);
+          encodingUsed = 'windows-1252';
+          console.log('Successfully decoded as Windows-1252');
+        }
       }
+
+      console.log('Encoding used:', encodingUsed);
+      console.log('File content length:', fileContent.length);
 
       const lines = fileContent.split('\n');
       const headerIndex = lines.findIndex(line => 
         line.includes('Start Date') || 
         line.includes('Campaign Name') || 
-        line.includes('Impressions')
+        line.includes('Impressions') ||
+        line.includes('Campaign') // Bredere søgning
       );
 
+      console.log('Total linjer i fil:', lines.length);
+      console.log('Header index fundet:', headerIndex);
+      console.log('Første 10 linjer:', lines.slice(0, 10).map((l, i) => `${i}: ${l.substring(0, 80)}`));
+
       if (headerIndex === -1) {
-        throw new Error('Kunne ikke finde header-linjen i CSV-filen');
+        throw new Error('Kunne ikke finde header-linjen i CSV-filen. Sørg for at filen er en Campaign Performance Report fra LinkedIn.');
       }
 
       const csvData = lines.slice(headerIndex).join('\n');
@@ -128,7 +156,8 @@ const LinkedInCampaignAnalyzer = () => {
         'Comments': 45,
         'Shares': 35,
         'Currency': 'USD',
-        'Clicks to Landing Page': 142
+        'Clicks to Landing Page': 142,
+        'Total Social Actions': 200
       }
     ];
     processCampaignData(mockData);
@@ -169,6 +198,7 @@ const LinkedInCampaignAnalyzer = () => {
         const shares = row.Shares || row.shares || 0;
         const currency = row.Currency || acc.currency || 'USD';
         const clicksToLandingPage = row['Clicks to Landing Page'] || 0;
+        const totalSocialActions = row['Total Social Actions'] || 0;
 
         return {
           impressions: acc.impressions + impressions,
@@ -179,7 +209,8 @@ const LinkedInCampaignAnalyzer = () => {
           comments: acc.comments + comments,
           shares: acc.shares + shares,
           currency: currency,
-          clicksToLandingPage: acc.clicksToLandingPage + clicksToLandingPage
+          clicksToLandingPage: acc.clicksToLandingPage + clicksToLandingPage,
+          totalSocialActions: acc.totalSocialActions + totalSocialActions
         };
       }, {
         impressions: 0,
@@ -190,7 +221,8 @@ const LinkedInCampaignAnalyzer = () => {
         comments: 0,
         shares: 0,
         currency: 'USD',
-        clicksToLandingPage: 0
+        clicksToLandingPage: 0,
+        totalSocialActions: 0
       });
 
       const usdToDkkRate = 7.5;
@@ -207,7 +239,8 @@ const LinkedInCampaignAnalyzer = () => {
         engagementRate: totals.impressions > 0 ? 
           ((totals.reactions + totals.comments + totals.shares) / totals.impressions * 100).toFixed(2) : 0,
         totalEngagements: totals.reactions + totals.comments + totals.shares,
-        landingPageClickRate: totals.clicks > 0 ? (totals.clicksToLandingPage / totals.clicks * 100).toFixed(1) : 0
+        landingPageClickRate: totals.clicks > 0 ? (totals.clicksToLandingPage / totals.clicks * 100).toFixed(1) : 0,
+        socialActionsRate: totals.impressions > 0 ? (totals.totalSocialActions / totals.impressions * 100).toFixed(2) : 0
       };
 
       const scores = {
@@ -242,6 +275,7 @@ const LinkedInCampaignAnalyzer = () => {
       const comments = row.Comments || row.comments || 0;
       const shares = row.Shares || row.shares || 0;
       const currency = row.Currency || acc.currency || 'USD';
+      const totalSocialActions = row['Total Social Actions'] || 0;
 
       return {
         impressions: acc.impressions + impressions,
@@ -252,7 +286,8 @@ const LinkedInCampaignAnalyzer = () => {
         comments: acc.comments + comments,
         shares: acc.shares + shares,
         campaignName: row['Campaign Group Name'] || acc.campaignName || 'LinkedIn Kampagne Gruppe',
-        currency: currency
+        currency: currency,
+        totalSocialActions: acc.totalSocialActions + totalSocialActions
       };
     }, {
       impressions: 0,
@@ -263,7 +298,8 @@ const LinkedInCampaignAnalyzer = () => {
       comments: 0,
       shares: 0,
       campaignName: '',
-      currency: 'USD'
+      currency: 'USD',
+      totalSocialActions: 0
     });
 
     console.log('Aggregated totals:', totals);
@@ -276,11 +312,12 @@ const LinkedInCampaignAnalyzer = () => {
       cpc: totals.clicks > 0 ? (spendDKK / totals.clicks).toFixed(2) : 0,
       conversionRate: totals.clicks > 0 ? (totals.conversions / totals.clicks * 100).toFixed(2) : 0,
       cpl: totals.conversions > 0 ? (spendDKK / totals.conversions).toFixed(2) : 0,
-      engagementRate: totals.impressions > 0 ? 
+              engagementRate: totals.impressions > 0 ? 
         ((totals.reactions + totals.comments + totals.shares) / totals.impressions * 100).toFixed(2) : 0,
       totalEngagements: totals.reactions + totals.comments + totals.shares,
       spendDKK: spendDKK,
-      exchangeRate: usdToDkkRate
+      exchangeRate: usdToDkkRate,
+      socialActionsRate: totals.impressions > 0 ? (totals.totalSocialActions / totals.impressions * 100).toFixed(2) : 0
     };
 
     setCampaignData({ 
@@ -666,6 +703,12 @@ const LinkedInCampaignAnalyzer = () => {
                         <div className="text-xs text-blue-700 font-medium mb-1">→ Landing Page</div>
                         <div className="text-lg font-bold text-blue-900">{campaign.clicksToLandingPage}</div>
                         <div className="text-xs text-blue-700 mt-0.5">{campaign.landingPageClickRate}% af clicks</div>
+                      </div>
+
+                      <div className="bg-purple-50 p-3 rounded border-2 border-purple-200">
+                        <div className="text-xs text-purple-700 font-medium mb-1">Handlinger</div>
+                        <div className="text-lg font-bold text-purple-900">{campaign.totalSocialActions || 0}</div>
+                        <div className="text-xs text-purple-700 mt-0.5">{campaign.socialActionsRate}% rate</div>
                       </div>
 
                       <div className="bg-gray-50 p-3 rounded border border-gray-200">
